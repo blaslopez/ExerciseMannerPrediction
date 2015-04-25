@@ -1,0 +1,263 @@
+---
+title: "Exercise Manner Prediction"
+author: "Blas López"
+date: "24 d’abril de 2015"
+output: html_document
+---
+---
+title: "Exercise Manner Predition"
+output: html_document
+---
+
+```{r StartEnvironment , message = FALSE, warning = FALSE, echo = FALSE}
+myseed <- 129
+```
+
+## Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+*Extracted from Course Project Assignment*
+
+## Code book
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. 
+
+There are a high number of columns in these data sets, some are irrelevant for this study (as "username", several kind of timestamps,...) and others will be used as predictor below. 
+
+The singular variable, with a complete mean in this study, is `classe` which is a factor cotaining the following values according to the manner how execercises are done:
+
+* `A` exactly according to the specification (Class A)
+* `B` throwing the elbows to the front (Class B)
+* `C` lifting the dumbbell only halfway (Class C)
+* `D` lowering the dumbbell only halfway (Class D) 
+* `E` throwing the hips to the front (Class E)
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz3XOq13lDi
+
+*Extracted from Course Project Assignment*
+
+## Requeriments
+
+The following libraries are required in order to run the project :
+
+```{r libraries, warning=FALSE, message=FALSE}
+library(RCurl) # For loading data from a http connection
+# For classification and regression and model fitting
+library(caret) 
+library(randomForest)  
+library(gbm)
+library(plyr) # required by gbm
+
+```
+
+### Reproducibility
+A pseudo-random number is setted as `r sprintf("%d",myseed) ` (`myseed`) in order that the reproduction of this scripts produces the same results.
+
+```{r setseed}
+set.seed(myseed)
+```
+
+## Data Processing 
+
+### Loading the data
+
+The data is loaded using the provided URL in the `training` variable and replacing several known null string values as `NA`.
+
+The dataset for the final part of the project is, also, loaded in the `testing` variable and the same columns, as in the `training` data set, will be removed.
+
+```{r loadTrainingDataSet, cache=TRUE}
+
+# The training set load 
+trainConn <- getURL("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+training <- read.csv(text = trainConn, na.strings=c("NA","#DIV/0!",""))
+rm(trainConn)
+
+# The dataset to testing and predicting the final models
+testConn <- getURL("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+testing <- read.csv(text = testConn, na.strings=c("NA","#DIV/0!",""))
+rm(testConn)
+
+```
+
+After loading, the `training` data set contains `r dim(training)[2] ` variables and `r dim(training)[1]` rows.
+
+*The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. from the*  ***Qualitative Activity Recognition of Weight Lifting Exercises***[^1].
+
+Read more: http://groupware.les.inf.puc-rio.br/har#literature#ixzz3XOQDGre7
+
+### Cleaning the data
+
+Looking at the seven first columns in dataset it seems to be no needed for this study and, then, are removed.
+
+```{r removefirstcols}
+names(training[,c(1:7)])
+# Irrelevant columns removed 
+training <- training[,-c(1:7)]
+testing <- testing[,-c(1:7)]
+````
+
+The `NA` values are clean after loading and, the zero covariate predictors, calculated using  ***nearZeroVar*** , are removed from the dataset function (if needed)
+
+```{r cleanning}
+
+# Removing NA columns (getting only with no NA values)
+keepcols <- colSums(is.na(training)) == 0
+training <- training [ , keepcols]
+testing <- testing [ , keepcols]
+
+# determines near zero covariate predictors 
+nzv <- nearZeroVar(training)
+# ... and remove it from training set (if any exists)
+if ( length(nzv) > 0 ) {
+   training <- training[,-nzv]
+   testing <- testing[,-nzv]
+}
+```
+
+After cleaning the `training` data set contains `r dim(training)[2] ` variables and `r dim(training)[1]` rows.
+
+*Note. These cleaning operations have been done without evaluating the impact of each one, but as methodological steps*
+
+### Partitioning
+
+The `training` data set is partitioned into two subsets (70% and 30% from the original one) in order to perform a cross-validation process.
+
+```{r subpartitions, message = FALSE}
+
+inTrain <- createDataPartition( y = training$classe, p=.7, list=FALSE)
+sTraining <- training[inTrain,] 
+sTesting <- training[-inTrain,]
+
+```
+Data Set |  Rows  | Columns
+-------- | ------ | -------
+training subset | `r dim(sTraining)[1] ` | `r dim(sTraining)[2] `
+testing subset | `r dim(sTesting)[1] ` | `r dim(sTesting)[2] `
+
+## Modeling
+
+Two models will be fitted using  **Random Forest** and **Gradient Boosted Machine** and then these models will be compared in accuracy using the prediction done with each model.
+
+```{r modeling, cache = TRUE}
+
+# Random Forest Model 
+rfModel <- randomForest(classe ~ . ,data = sTraining, method = "class")
+
+# Gradient Boosted Machine
+
+tc <- trainControl("repeatedcv", number=10, repeats=4, 
+                   classProbs=TRUE, savePred=T, 
+                   allowParallel=TRUE)
+gbmModel <- train(classe ~ . , data = sTraining, method = "gbm", trControl=tc, verbose = FALSE)
+
+```
+
+### Model comparisson
+
+```{r compared}
+# Confusion Matrix from each model
+# now with random forest model
+# ... predict using the testing subsample data set
+rfPrediction <- predict(rfModel, sTesting)
+# ... and generates the confusion matrix
+rfConfusion <- confusionMatrix(sTesting$classe,rfPrediction)
+
+# ... and now with boosted
+gbmPrediction <- predict(gbmModel, sTesting)
+gbmConfusion <- confusionMatrix(sTesting$classe,gbmPrediction)
+
+```
+
+Model | Accuracy | Kappa | 
+------|----------|-------|
+Random Forest | `r rfConfusion$overall[1]` | `r rfConfusion$overall[2]` |
+Gradient Boosted Machine  | `r gbmConfusion$overall[1]` | `r gbmConfusion$overall[1] ` |
+
+### Model selection
+
+As shown in the previous table the accuracy for Random Forest (`r rfConfusion$overall[1]`) is better than Gradient Boosted Machine. The first one will be the selected model.
+
+The selected model is **Random Forest** 
+
+The expected out-of-sample error is `1 - accuracy` (that means `r 1 - rfConfusion$overall[1]` ) in the final model fitted by the training dataset.
+
+The next plot is about the overall error of the model for each `classe` plus the *Out-of-bag* (OOB).
+
+```{r plot }
+# two plots one for the plot and another for legend
+layout(matrix(c(1,2),nrow=1),  width=c(4,1)) 
+# No margin on the right side
+par( mar=c(5,4,4,0)) 
+plot(rfModel, log="y", main = "Overall error of the model" )
+
+#No margin on the left side
+par(mar=c(5,0,4,2)) 
+plot(c(0,1),type="n", axes=F, xlab="", ylab="")
+legend("top", colnames(rfModel$err.rate),col=1:6,cex=0.8,fill=1:6)
+```
+
+Finally,  the confusion matrix of the selected is :
+
+```{r confusionselected, echo=FALSE}
+rfModel$confusion
+
+```
+
+*See Annex 1 for detailed confusion matrix*
+
+## Submission
+
+When `training` dataset was loaded, a new dataset (`testing`) was loaded too, in order to be used with the selected model and predict new values.
+
+Now, this second dataset, is used as input to predict the values with the selected model and to generate the files to submit for the final part of the Course Project.
+
+```{r loadTestingDataSet, cache=TRUE}
+
+# function for generation of submission file
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+
+# make the prediction
+answers <- predict(rfModel, testing) 
+pml_write_files(answers)
+```
+
+The final answers are :
+```{r answers, echo=FALSE}
+answers
+```
+
+## Annex 1 Confusion Matrix
+
+**Random Forest Confusion Matrix**
+
+```{r annex1rf, echo = FALSE }
+rfConfusion
+```
+
+**Gradient Boosted Machine Confusion Matrix**
+
+```{r annex1gbm , echo=FALSE}
+gbmConfusion
+```
+
+## Annex 2. Importance of predictors
+
+The next table shows the 20 first predictors by importance for the selected model.
+
+```{r importance}
+i <- importance(rfModel)
+df <- data.frame(dimnames(i)[[1]],i,row.names=NULL)
+names(df) <- c("Predictor","Overall")
+head(df[with(df,order(-df$Overall)),],20)
+
+```
+
+## References
+
+[^1]: Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
